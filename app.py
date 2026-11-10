@@ -17,47 +17,41 @@ NSE_HEADERS = {
 CACHE_FILE="fo_symbols_cache.csv"
 
 def get_nse_fo_symbols():
-    """Try current dated NSE MII contract gzip; derive stock underlyings from FUTSTK/OPTSTK."""
-    session=requests.Session()
-    session.headers.update(NSE_HEADERS)
-    # Establish NSE cookies; some deployments may block this request.
-    try: session.get("https://www.nseindia.com",timeout=12)
-    except Exception: pass
-    today=datetime.now().date()
+    """Fetch NSE's current permitted-lot-size CSV (contains eligible F&O symbols)."""
+    url="https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    headers={
+      "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+      "Accept":"text/csv,text/plain,*/*",
+      "Referer":"https://www.nseindia.com/products-services/equity-derivatives-contract-information"
+    }
     errors=[]
-    for days_back in range(0,8):
-        d=today-timedelta(days=days_back)
-        date_tag=d.strftime("%d%m%Y")
-        urls=[
-          f"https://nsearchives.nseindia.com/content/fo/NSE_FO_contract_{date_tag}.csv.gz",
-          f"https://archives.nseindia.com/content/fo/NSE_FO_contract_{date_tag}.csv.gz",
-          f"https://www.nseindia.com/content/fo/NSE_FO_contract_{date_tag}.csv.gz"
-        ]
-        for url in urls:
-            try:
-                r=session.get(url,timeout=25)
-                if r.status_code!=200 or len(r.content)<1000: continue
-                raw=gzip.decompress(r.content) if r.content[:2]==b"\\x1f\\x8b" else r.content
-                df=pd.read_csv(io.BytesIO(raw),low_memory=False)
-                cols={str(c).strip().upper():c for c in df.columns}
-                # Contract file field names vary by NSE version.
-                inst_col=next((cols[k] for k in ["INSTRUMENT","INSTRUMENTTYPE","INSTRUMENT_TYPE"] if k in cols),None)
-                sym_col=next((cols[k] for k in ["SYMBOL","UNDERLYING","UNDERLYING_SYMBOL"] if k in cols),None)
-                if not inst_col or not sym_col: continue
-                inst=df[inst_col].astype(str).str.upper()
-                symbols=df.loc[inst.isin(["FUTSTK","OPTSTK"]),sym_col].astype(str).str.strip().str.upper()
-                symbols=symbols[symbols.str.match(r"^[A-Z0-9&\-]+$")].drop_duplicates().sort_values()
-                if len(symbols)>100:
-                    out=pd.DataFrame({"Symbol":symbols})
-                    out.to_csv(CACHE_FILE,index=False)
-                    return list(symbols),d.strftime("%d-%b-%Y"),"NSE live contract file"
-            except Exception as e: errors.append(str(e))
-    # Fallback only if official request is unavailable; explicitly label cached list.
+    for host_url in [url, "https://www.nseindia.com/content/fo/fo_mktlots.csv"]:
+        try:
+            response=requests.get(host_url,headers=headers,timeout=30)
+            response.raise_for_status()
+            if len(response.content)<500: raise ValueError("CSV response too small")
+            # NSE file may be comma- or semicolon-separated and has changing column labels.
+            df=pd.read_csv(io.BytesIO(response.content),encoding="latin1",low_memory=False)
+            df.columns=[str(c).strip().upper().replace(" ","_") for c in df.columns]
+            possible=[c for c in df.columns if any(k in c for k in ["SYMBOL","UNDERLYING","SECURITY"])]
+            if not possible: raise ValueError("Symbol column not found. Columns: "+str(list(df.columns)))
+            symcol=possible[0]
+            symbols=df[symcol].astype(str).str.strip().str.upper()
+            symbols=symbols[symbols.str.match(r"^[A-Z0-9&\-]+$")].drop_duplicates().sort_values()
+            # Exclude indices and non-stock rows; lot-size report typically includes index names too.
+            indices={"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}
+            symbols=[s for s in symbols.tolist() if s not in indices]
+            if len(symbols)<100: raise ValueError(f"Only {len(symbols)} symbols parsed; reject potentially malformed CSV")
+            pd.DataFrame({"Symbol":symbols}).to_csv(CACHE_FILE,index=False)
+            return symbols,datetime.now().strftime("%d-%b-%Y"),"NSE permitted lot-size CSV"
+        except Exception as exc: errors.append(f"{host_url}: {exc}")
+    # Only use a previously downloaded successful list; never use a built-in/manual universe.
     try:
-        cached=pd.read_csv(CACHE_FILE)["Symbol"].dropna().astype(str).str.upper().unique().tolist()
-        if len(cached)>100: return cached,"Cache date unknown","Cached NSE universe (verify freshness)"
+        old=pd.read_csv(CACHE_FILE)["Symbol"].dropna().astype(str).str.upper().unique().tolist()
+        if len(old)>=100:
+            return old,"Previous successful fetch","Cached NSE list (may be stale)"
     except Exception: pass
-    raise RuntimeError("NSE contract file could not be downloaded and no saved F&O universe exists. NSE may block Streamlit Cloud. Please retry later.")
+    raise RuntimeError("NSE F&O list fetch failed. NSE may block Streamlit Cloud. "+ " | ".join(errors))
 
 def rsi(s,n=14):
     delta=s.diff()
