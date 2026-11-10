@@ -17,41 +17,64 @@ NSE_HEADERS = {
 CACHE_FILE="fo_symbols_cache.csv"
 
 def get_nse_fo_symbols():
-    """Fetch NSE's current permitted-lot-size CSV (contains eligible F&O symbols)."""
-    url="https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    """Fetch current NSE F&O underlyings via NSE's underlying API; use FYERS FO master fallback."""
+    errors=[]
+    # NSE's public underlying-information endpoint (JSON)
+    nse_urls=[
+      "https://www.nseindia.com/api/underlying-information",
+      "https://www.nseindia.com/api/underlying-information?type=equity"
+    ]
     headers={
       "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-      "Accept":"text/csv,text/plain,*/*",
-      "Referer":"https://www.nseindia.com/products-services/equity-derivatives-contract-information"
+      "Accept":"application/json,text/plain,*/*",
+      "Referer":"https://www.nseindia.com/"
     }
-    errors=[]
-    for host_url in [url, "https://www.nseindia.com/content/fo/fo_mktlots.csv"]:
+    session=requests.Session(); session.headers.update(headers)
+    try: session.get("https://www.nseindia.com",timeout=10)
+    except Exception: pass
+    for url in nse_urls:
         try:
-            response=requests.get(host_url,headers=headers,timeout=30)
-            response.raise_for_status()
-            if len(response.content)<500: raise ValueError("CSV response too small")
-            # NSE file may be comma- or semicolon-separated and has changing column labels.
-            df=pd.read_csv(io.BytesIO(response.content),encoding="latin1",low_memory=False)
-            df.columns=[str(c).strip().upper().replace(" ","_") for c in df.columns]
-            possible=[c for c in df.columns if any(k in c for k in ["SYMBOL","UNDERLYING","SECURITY"])]
-            if not possible: raise ValueError("Symbol column not found. Columns: "+str(list(df.columns)))
-            symcol=possible[0]
-            symbols=df[symcol].astype(str).str.strip().str.upper()
-            symbols=symbols[symbols.str.match(r"^[A-Z0-9&\-]+$")].drop_duplicates().sort_values()
-            # Exclude indices and non-stock rows; lot-size report typically includes index names too.
-            indices={"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}
-            symbols=[s for s in symbols.tolist() if s not in indices]
-            if len(symbols)<100: raise ValueError(f"Only {len(symbols)} symbols parsed; reject potentially malformed CSV")
-            pd.DataFrame({"Symbol":symbols}).to_csv(CACHE_FILE,index=False)
-            return symbols,datetime.now().strftime("%d-%b-%Y"),"NSE permitted lot-size CSV"
-        except Exception as exc: errors.append(f"{host_url}: {exc}")
-    # Only use a previously downloaded successful list; never use a built-in/manual universe.
+            r=session.get(url,timeout=20); r.raise_for_status()
+            j=r.json()
+            # NSE response keys can change; recursively collect likely symbol fields.
+            found=set()
+            def walk(obj):
+                if isinstance(obj,dict):
+                    for k,v in obj.items():
+                        if str(k).lower() in {"symbol","underlying","underlyingsymbol","underlying_symbol"} and isinstance(v,str):
+                            s=v.strip().upper()
+                            if re.fullmatch(r"[A-Z0-9&\-]+",s): found.add(s)
+                        walk(v)
+                elif isinstance(obj,list):
+                    for v in obj: walk(v)
+            walk(j)
+            found-= {"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}
+            if len(found)>=100:
+                syms=sorted(found); pd.DataFrame({"Symbol":syms}).to_csv(CACHE_FILE,index=False)
+                return syms,datetime.now().strftime("%d-%b-%Y"),"NSE underlying-information API"
+        except Exception as e: errors.append("NSE API: "+str(e)[:150])
+    # Public FYERS NSE equity-derivatives symbol master fallback
+    try:
+        fy="https://public.fyers.in/sym_details/NSE_FO.csv"
+        r=requests.get(fy,headers={"User-Agent":"Mozilla/5.0"},timeout=35); r.raise_for_status()
+        raw=pd.read_csv(io.BytesIO(r.content),header=None,low_memory=False)
+        # Symbol Details typically contains NSE:SYMBOL...; identify stock underlyings
+        details=raw.astype(str).agg(" ".join,axis=1).str.upper()
+        found=set()
+        for text in details:
+            for match in re.findall(r"(?:NSE:)?([A-Z][A-Z0-9&\-]{1,20})(?:[-_](?:FUT|CE|PE)|\d{2}[A-Z]{3}\d{2,4}|[-_]\d)",text):
+                if match not in {"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}: found.add(match)
+        if len(found)>=100:
+            syms=sorted(found); pd.DataFrame({"Symbol":syms}).to_csv(CACHE_FILE,index=False)
+            return syms,datetime.now().strftime("%d-%b-%Y"),"FYERS NSE_FO symbol master"
+        errors.append("FYERS master: parsed only "+str(len(found))+" symbols")
+    except Exception as e: errors.append("FYERS master: "+str(e)[:150])
+    # Previous successful download only; do not hardcode/manual universe.
     try:
         old=pd.read_csv(CACHE_FILE)["Symbol"].dropna().astype(str).str.upper().unique().tolist()
-        if len(old)>=100:
-            return old,"Previous successful fetch","Cached NSE list (may be stale)"
+        if len(old)>=100: return old,"Previous successful fetch","Cached F&O list (may be stale)"
     except Exception: pass
-    raise RuntimeError("NSE F&O list fetch failed. NSE may block Streamlit Cloud. "+ " | ".join(errors))
+    raise RuntimeError("Unable to retrieve current F&O universe. "+" | ".join(errors))
 
 def rsi(s,n=14):
     delta=s.diff()
