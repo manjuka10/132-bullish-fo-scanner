@@ -4,6 +4,7 @@ import numpy as np
 import yfinance as yf
 import requests, gzip, io, re
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="1-3-2 Bullish F&O Scanner", layout="wide")
@@ -15,6 +16,8 @@ NSE_HEADERS = {
  "Accept":"*/*","Referer":"https://www.nseindia.com/"
 }
 CACHE_FILE="fo_symbols_cache.csv"
+IST = ZoneInfo("Asia/Kolkata")
+def ist_now(): return datetime.now(IST)
 
 def get_nse_fo_symbols():
     """Fetch current NSE F&O underlyings via NSE's underlying API; use FYERS FO master fallback."""
@@ -51,7 +54,7 @@ def get_nse_fo_symbols():
             found-= {"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}
             if len(found)>=100:
                 syms=sorted(found); pd.DataFrame({"Symbol":syms}).to_csv(CACHE_FILE,index=False)
-                return syms,datetime.now().strftime("%d-%b-%Y"),"NSE underlying-information API"
+                return syms,ist_now().strftime("%d-%b-%Y"),"NSE underlying-information API"
         except Exception as e: errors.append("NSE API: "+str(e)[:150])
     # Public FYERS NSE equity-derivatives symbol master fallback
     try:
@@ -66,7 +69,7 @@ def get_nse_fo_symbols():
                 if match not in {"NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","NIFTYNXT50"}: found.add(match)
         if len(found)>=100:
             syms=sorted(found); pd.DataFrame({"Symbol":syms}).to_csv(CACHE_FILE,index=False)
-            return syms,datetime.now().strftime("%d-%b-%Y"),"FYERS NSE_FO symbol master"
+            return syms,ist_now().strftime("%d-%b-%Y"),"FYERS NSE_FO symbol master"
         errors.append("FYERS master: parsed only "+str(len(found))+" symbols")
     except Exception as e: errors.append("FYERS master: "+str(e)[:150])
     # Previous successful download only; do not hardcode/manual universe.
@@ -145,7 +148,7 @@ if refresh:
         st.session_state["symbols"]=symbols
         st.session_state["fo_date"]=fo_date
         st.session_state["fo_source"]=source
-        st.session_state["fo_updated"]=datetime.now().astimezone().strftime("%d-%b-%Y %I:%M:%S %p %Z")
+        st.session_state["fo_updated"]=ist_now().strftime("%d-%b-%Y %I:%M:%S %p IST")
         st.success(f"Loaded {len(symbols)} NSE F&O stocks • {source}")
         with st.spinner(f"Scanning {len(symbols)} stocks using daily data..."):
             bd=yf.download("^NSEI",period=period,interval="1d",auto_adjust=True,progress=False)
@@ -160,7 +163,7 @@ if refresh:
             res=pd.DataFrame(rows)
             if "Score" in res: res=res.sort_values("Score",ascending=False,na_position="last")
             st.session_state["results"]=res
-            st.session_state["market_updated"]=datetime.now().astimezone().strftime("%d-%b-%Y %I:%M:%S %p %Z")
+            st.session_state["market_updated"]=ist_now().strftime("%d-%b-%Y %I:%M:%S %p IST")
     except Exception as e: st.error(f"Scan failed: {e}")
 
 # Status / results
