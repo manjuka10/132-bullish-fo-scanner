@@ -113,7 +113,14 @@ def scan_one(sym,bench,period):
         rs=stock20-nifty20
         avgvol=v.rolling(20).mean().iloc[-1]
         vr=x.Volume/avgvol if avgvol and avgvol>0 else np.nan
-        res=df.High.iloc[-21:-1].max()
+        # Prior 20-session breakout reference (excluding today's candle)
+        breakout_res=float(df.High.iloc[-21:-1].max())
+        # Nearest overhead resistance: local swing highs from recent 120 sessions above current close
+        highs=df.High.iloc[-121:-1].copy()
+        swing_mask=(highs.shift(1)<highs) & (highs.shift(-1)<=highs)
+        swing_levels=highs[swing_mask]
+        overhead=swing_levels[swing_levels>x.Close]
+        next_res=float(overhead.min()) if not overhead.empty else np.nan
         trend=x.Close>x.E20>x.E50>x.E200
         rising=x.E20>df.E20.iloc[-6]
         breakout=x.Close>res
