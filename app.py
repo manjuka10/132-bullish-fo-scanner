@@ -123,11 +123,11 @@ def scan_one(sym,bench,period):
         next_res=float(overhead.min()) if not overhead.empty else np.nan
         trend=x.Close>x.E20>x.E50>x.E200
         rising=x.E20>df.E20.iloc[-6]
-        breakout=x.Close>res
+        breakout=x.Close>breakout_res
         s_tr=25 if trend else (15 if x.Close>x.E50>x.E200 else (8 if x.Close>x.E200 else 0))
         s_adx=20 if x.ADX>=25 and x.PDI>x.MDI else (12 if x.PDI>x.MDI and x.ADX>=18 else 0)
         s_rs=20 if rs>=3 else (15 if rs>=1 else (8 if rs>0 else 0))
-        s_br=15 if breakout else (8 if x.Close>res*.98 else 0)
+        s_br=15 if breakout else (8 if x.Close>breakout_res*.98 else 0)
         s_vol=10 if vr>=1.5 else (6 if vr>=1.1 else 0)
         s_rsi=10 if 55<=x.RSI<=70 else (6 if 50<=x.RSI<55 or 70<x.RSI<=75 else 0)
         score=s_tr+s_adx+s_rs+s_br+s_vol+s_rsi
@@ -138,7 +138,8 @@ def scan_one(sym,bench,period):
           "RSI":round(float(x.RSI),1),"RS vs Nifty (%)":round(float(rs),2),
           "Volume/20D":round(float(vr),2) if pd.notna(vr) else np.nan,
           "Breakout":"Yes" if breakout else "No","ATR%":round(float(x.ATR/x.Close*100),2),
-          "Resistance":round(float(res),2)}
+          "20D Breakout Level":round(float(breakout_res),2),
+          "Next Resistance Above":round(float(next_res),2) if pd.notna(next_res) else "Not found"}
     except Exception as e: return {"Symbol":sym,"Error":str(e)[:120]}
 
 # Top controls
